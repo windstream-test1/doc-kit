@@ -1,5 +1,14 @@
 import type { publicGenerators, allGenerators } from './index.mjs';
 
+/** Progress is aggregated on the calling thread. Streamed totals may be unknown. */
+export type ProgressEvent = {
+  generator: string;
+  state: 'start' | 'progress' | 'complete' | 'done' | 'failed';
+  completed?: number;
+  total?: number;
+  label?: string;
+};
+
 declare global {
   // Public generators exposed to the CLI
   export type AvailableGenerators = typeof publicGenerators;

@@ -21,6 +21,14 @@ and an input, from flags or a [configuration file](#configuration-files):
 npx @doc-kit/cli generate -t html -t orama-db -i "docs/**/*.md" -o out
 ```
 
+In an interactive terminal, a progress bar shows the current parsing or
+generation stage, completed item counts, and the latest file when available.
+Counts update as chunks finish; streamed stages show a count without a total
+until they complete. A stage completes after its output has been written.
+Progress is hidden when stdout is redirected or `--log-level` is set to
+anything other than `info`, including `debug`. Builds started by `preview`
+show the same progress.
+
 Quote glob patterns, so they reach doc-kit as written instead of being
 expanded by your shell. Options that take a list accept several values after
 one flag (`-t html orama-db`) or the flag repeated (`-t html -t orama-db`).

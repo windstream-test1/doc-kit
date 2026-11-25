@@ -6,7 +6,8 @@ import { LogLevel } from '@doc-kit/core/logger/constants.mjs';
 import logger from '@doc-kit/core/logger/index.mjs';
 import { Command, Option } from 'commander';
 
-import commands from './commands/index.mjs';
+import createProgressBar from '../src/utils/progress-bar.mjs';
+import createCommands from './commands/index.mjs';
 
 const program = new Command()
   .name('doc-kit')
@@ -18,8 +19,13 @@ const program = new Command()
   )
   .hook('preAction', cmd => logger.setLogLevel(cmd.opts().logLevel));
 
+// Only animate at the default log level, keeping debug traces readable.
+const progress = createProgressBar({
+  enabled: () => logger.getLogLevel() === LogLevel.info,
+});
+
 // Registering commands
-commands.forEach(command => program.addCommand(command));
+createCommands(progress).forEach(command => program.addCommand(command));
 
 // Parse and execute command-line arguments
 program.parse(process.argv);

@@ -19,8 +19,12 @@ const generatorsLogger = logger.child('generators');
  * Creates a generator orchestration system that manages the execution of
  * documentation generators in dependency order, with support for parallel
  * processing and streaming results.
+ *
+ * @param {object} [options]
+ * @param {(event: import('./generators/types').ProgressEvent) => void} [options.onProgress]
+ * Receives progress on the calling thread; never sent to workers.
  */
-const createGenerator = () => {
+const createGenerator = ({ onProgress } = {}) => {
   // Owns all caching: generator results, stream collection, and the
   // consumer-count bookkeeping that drives eviction.
   const cache = createCache();
@@ -99,13 +103,20 @@ const createGenerator = () => {
         );
 
         generatorsLogger.debug(`Starting "${name}"`);
+        onProgress?.({ generator: name, state: 'start' });
 
         // Load its Markdown pipeline, for what it processes on this thread
         await loadMarkdownPlugins(generator, configuration[name]?.markdown);
 
         // Create parallel worker for streaming generators
         const worker = hasParallelProcessor
-          ? createParallelWorker(specifier, generator, pool, configuration)
+          ? createParallelWorker(
+              specifier,
+              generator,
+              pool,
+              configuration,
+              onProgress
+            )
           : Promise.resolve(null);
 
         // Returned rather than awaited, so this function doesn't hold on to the
@@ -116,9 +127,17 @@ const createGenerator = () => {
         // it isn't complete here
         if (!isAsyncIterable(result)) {
           generatorsLogger.debug(`Completed "${name}"`);
+          onProgress?.({ generator: name, state: 'complete' });
+
+          return result;
         }
 
-        return result;
+        // A stage completes only after its stream (including output writes)
+        // has been consumed, rather than when generate returns the iterator.
+        return (async function* () {
+          yield* result;
+          onProgress?.({ generator: name, state: 'complete' });
+        })();
       })
     );
   };
@@ -131,7 +150,7 @@ const createGenerator = () => {
    * generators, or `undefined` with `discardResults`, which lets each go as
    * soon as it is produced
    */
-  const runGenerators = async configuration => {
+  const run = async configuration => {
     const { target, threads, discardResults } = configuration;
 
     // Resolve shorthand names and load the full dependency closure up front,
@@ -159,19 +178,38 @@ const createGenerator = () => {
     // Create worker pool
     pool = createWorkerPool(threads);
 
-    // Schedule all generators
-    for (const specifier of targets) {
-      scheduleGenerator(specifier, generators, inputOf, configuration);
+    try {
+      // Schedule all generators
+      for (const specifier of targets) {
+        scheduleGenerator(specifier, generators, inputOf, configuration);
+      }
+
+      // Start all reads in parallel (don't await sequentially). Reading through
+      // the shared path lets the final read also trigger eviction.
+      const read = discardResults ? cache.drain : cache.consume;
+      const collected = await Promise.all(targets.map(read));
+
+      return discardResults ? undefined : collected;
+    } finally {
+      await pool.destroy();
     }
+  };
 
-    // Start all reads in parallel (don't await sequentially). Reading through
-    // the shared path lets the final read also trigger eviction.
-    const read = discardResults ? cache.drain : cache.consume;
-    const collected = await Promise.all(targets.map(read));
-
-    await pool.destroy();
-
-    return discardResults ? undefined : collected;
+  /**
+   * Runs the pipeline, finishing the progress display before errors are logged.
+   *
+   * @param {import('./utils/configuration/types').Configuration} configuration
+   * @returns {Promise<unknown[] | undefined>} Requested results, unless discarded
+   */
+  const runGenerators = async configuration => {
+    try {
+      const result = await run(configuration);
+      onProgress?.({ generator: 'pipeline', state: 'done' });
+      return result;
+    } catch (error) {
+      onProgress?.({ generator: 'pipeline', state: 'failed' });
+      throw error;
+    }
   };
 
   return { runGenerators };

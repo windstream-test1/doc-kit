@@ -1,4 +1,7 @@
-import generate from './generate.mjs';
-import preview from './preview.mjs';
+import createGenerateCommand from './generate.mjs';
+import createPreviewCommand from './preview.mjs';
 
-export default [generate, preview];
+/** Creates CLI commands sharing a progress reporter. */
+export default function createCommands(onProgress) {
+  return [createGenerateCommand(onProgress), createPreviewCommand(onProgress)];
+}
