@@ -66,13 +66,15 @@ const createTask = (
  * @param {GeneratorMetadata} generator - The loaded generator
  * @param {import('piscina').Piscina} pool - Piscina instance
  * @param {import('../utils/configuration/types').Configuration} configuration - Generator options
+ * @param {(event: import('./progress').ProgressEvent) => void} [onProgress]
  * @returns {ParallelWorker}
  */
 export default function createParallelWorker(
   specifier,
   generator,
   pool,
-  configuration
+  configuration,
+  onProgress
 ) {
   const { threads, chunkSize } = configuration;
 
@@ -93,6 +95,25 @@ export default function createParallelWorker(
      */
     async *stream(items, extra) {
       const streamed = isAsyncIterable(items);
+      let completed = 0;
+
+      /** Reports successful chunks on the main thread, in completion order. */
+      const report = (batch, indices) => {
+        if (!onProgress) {
+          return;
+        }
+        completed += indices.length;
+        const item = batch[indices.at(-1)];
+        const file = Array.isArray(item) ? item[0] : item?.path;
+
+        onProgress?.({
+          type: 'chunk',
+          generator: name,
+          completed,
+          total: streamed ? undefined : items.length,
+          file: typeof file === 'string' ? file : undefined,
+        });
+      };
 
       if (!streamed && items.length === 0) {
         return;
@@ -126,7 +147,9 @@ export default function createParallelWorker(
       if (threads <= 1 || (!streamed && items.length <= 2)) {
         for await (const batch of batches) {
           for (const indices of distribute(batch)) {
-            yield await generator.processChunk(batch, indices, extra);
+            const result = await generator.processChunk(batch, indices, extra);
+            report(batch, indices);
+            yield result;
           }
         }
 
@@ -171,7 +194,10 @@ export default function createParallelWorker(
           tasks.push(
             task
               .then(
-                result => ({ result }),
+                result => {
+                  report(batch, indices);
+                  return { result };
+                },
                 error => ({ error })
               )
               .finally(() => {

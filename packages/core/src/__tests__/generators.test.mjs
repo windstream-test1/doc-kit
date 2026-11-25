@@ -21,6 +21,13 @@ const gate = Promise.withResolvers();
 
 // Synthetic generators keyed by specifier (any string works as a specifier)
 const syntheticGenerators = {
+  'multi-source': {
+    name: 'multi-source',
+    dependent: ['multi-a', 'multi-b'],
+    generate: async () => [],
+  },
+  'multi-a': { name: 'multi-a', generate: async input => input },
+  'multi-b': { name: 'multi-b', generate: async input => input },
   // Root streaming generator (no dependency)
   ast: {
     name: 'ast',
@@ -182,7 +189,10 @@ mock.module('../generators/loader.mjs', {
         const generator = syntheticGenerators[specifier];
         generators.set(specifier, generator);
 
-        for (const related of [generator.dependsOn, generator.dependent]) {
+        for (const related of [
+          generator.dependsOn,
+          ...[generator.dependent].flat(),
+        ]) {
           if (related) {
             queue.push(related);
           }
@@ -227,6 +237,24 @@ mock.module('../utils/markdown/plugins.mjs', {
 const createGenerator = (await import('../generators.mjs')).default;
 
 describe('createGenerator orchestration', () => {
+  it('counts only scheduled stages when a dependent branch is inactive', async () => {
+    const events = [];
+    await createGenerator({
+      onProgress: event => events.push(event),
+    }).runGenerators({
+      target: ['multi-source', 'multi-a'],
+      threads: 1,
+    });
+    assert.deepEqual(events[0], { type: 'init', total: 2 });
+    assert.deepEqual(
+      events
+        .filter(event => event.type === 'complete')
+        .map(event => event.generator),
+      ['multi-source', 'multi-a']
+    );
+    assert.deepEqual(events.at(-1), { type: 'stop' });
+  });
+
   beforeEach(() => {
     for (const key of Object.keys(runs)) {
       delete runs[key];
