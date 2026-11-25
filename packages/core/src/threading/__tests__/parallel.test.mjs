@@ -241,6 +241,48 @@ describe('createParallelWorker', () => {
     deepStrictEqual(await result, [0, 1, 2, 3, 4]);
   });
 
+  it('reports successful worker completions before results are yielded in order', async () => {
+    const tasks = [];
+    const events = [];
+    const pool = {
+      run: task =>
+        new Promise(resolve => tasks.push({ resolve, input: task.input })),
+    };
+    const worker = createParallelWorker(
+      'ast-js',
+      astJsGenerator,
+      pool,
+      {
+        threads: 2,
+        chunkSize: 1,
+      },
+      event => events.push(event)
+    );
+    const input = Array.from({ length: 3 }, (_, index) => ({
+      path: `/file${index}`,
+    }));
+    const result = collectStream(worker.stream(input, {}));
+    await Promise.resolve();
+    tasks[2].resolve(tasks[2].input);
+    await new Promise(resolve => setImmediate(resolve));
+    deepStrictEqual(events, [
+      {
+        type: 'chunk',
+        generator: 'ast-js',
+        completed: 1,
+        total: 3,
+        file: '/file2',
+      },
+    ]);
+    tasks[0].resolve(tasks[0].input);
+    tasks[1].resolve(tasks[1].input);
+    deepStrictEqual(await result, input);
+    deepStrictEqual(
+      events.map(event => event.completed),
+      [1, 2, 3]
+    );
+  });
+
   it('propagates a later worker failure without an unhandled rejection', async () => {
     const tasks = [];
     const pool = {

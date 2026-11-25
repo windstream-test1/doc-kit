@@ -6,7 +6,10 @@ import { LogLevel } from '@doc-kit/core/logger/constants.mjs';
 import logger from '@doc-kit/core/logger/index.mjs';
 import { Command, Option } from 'commander';
 
-import commands from './commands/index.mjs';
+import { createProgress } from '../src/utils/progress.mjs';
+import createCommands from './commands/index.mjs';
+
+const progress = createProgress();
 
 const program = new Command()
   .name('doc-kit')
@@ -19,7 +22,7 @@ const program = new Command()
   .hook('preAction', cmd => logger.setLogLevel(cmd.opts().logLevel));
 
 // Registering commands
-commands.forEach(command => program.addCommand(command));
+createCommands(progress.update).forEach(command => program.addCommand(command));
 
 // Parse and execute command-line arguments
 program.parse(process.argv);

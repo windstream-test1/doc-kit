@@ -19,8 +19,12 @@ const generatorsLogger = logger.child('generators');
  * Creates a generator orchestration system that manages the execution of
  * documentation generators in dependency order, with support for parallel
  * processing and streaming results.
+ *
+ * @param {object} [options]
+ * @param {(event: import('./threading/progress').ProgressEvent) => void} [options.onProgress]
+ * Optional main-thread observer; never passed to worker threads.
  */
-const createGenerator = () => {
+const createGenerator = ({ onProgress } = {}) => {
   // Owns all caching: generator results, stream collection, and the
   // consumer-count bookkeeping that drives eviction.
   const cache = createCache();
@@ -99,13 +103,20 @@ const createGenerator = () => {
         );
 
         generatorsLogger.debug(`Starting "${name}"`);
+        onProgress?.({ type: 'start', generator: name });
 
         // Load its Markdown pipeline, for what it processes on this thread
         await loadMarkdownPlugins(generator, configuration[name]?.markdown);
 
         // Create parallel worker for streaming generators
         const worker = hasParallelProcessor
-          ? createParallelWorker(specifier, generator, pool, configuration)
+          ? createParallelWorker(
+              specifier,
+              generator,
+              pool,
+              configuration,
+              onProgress
+            )
           : Promise.resolve(null);
 
         // Returned rather than awaited, so this function doesn't hold on to the
@@ -114,9 +125,18 @@ const createGenerator = () => {
       })().then(result => {
         // A streaming generator returns before it has produced anything, so
         // it isn't complete here
-        if (!isAsyncIterable(result)) {
-          generatorsLogger.debug(`Completed "${name}"`);
+        if (isAsyncIterable(result)) {
+          if (!onProgress) {
+            return result;
+          }
+          return (async function* () {
+            yield* result;
+            onProgress?.({ type: 'complete', generator: name });
+          })();
         }
+
+        generatorsLogger.debug(`Completed "${name}"`);
+        onProgress?.({ type: 'complete', generator: name });
 
         return result;
       })
@@ -131,7 +151,7 @@ const createGenerator = () => {
    * generators, or `undefined` with `discardResults`, which lets each go as
    * soon as it is produced
    */
-  const runGenerators = async configuration => {
+  const runPipeline = async configuration => {
     const { target, threads, discardResults } = configuration;
 
     // Resolve shorthand names and load the full dependency closure up front,
@@ -159,6 +179,24 @@ const createGenerator = () => {
     // Create worker pool
     pool = createWorkerPool(threads);
 
+    if (onProgress) {
+      // Loaded dependents may be inactive when another branch was requested.
+      const scheduled = new Set();
+      const pending = [...targets];
+      while (pending.length) {
+        const specifier = pending.pop();
+        if (scheduled.has(specifier)) {
+          continue;
+        }
+        scheduled.add(specifier);
+        const dependency = inputOf.get(specifier);
+        if (dependency) {
+          pending.push(dependency);
+        }
+      }
+      onProgress({ type: 'init', total: scheduled.size });
+    }
+
     // Schedule all generators
     for (const specifier of targets) {
       scheduleGenerator(specifier, generators, inputOf, configuration);
@@ -169,9 +207,25 @@ const createGenerator = () => {
     const read = discardResults ? cache.drain : cache.consume;
     const collected = await Promise.all(targets.map(read));
 
-    await pool.destroy();
-
     return discardResults ? undefined : collected;
+  };
+
+  /**
+   * Runs the pipeline and cleans up progress and workers on every exit.
+   *
+   * @param {import('./utils/configuration/types').Configuration} configuration
+   * @returns {Promise<unknown[] | undefined>}
+   */
+  const runGenerators = async configuration => {
+    try {
+      return await runPipeline(configuration);
+    } finally {
+      try {
+        await pool?.destroy();
+      } finally {
+        onProgress?.({ type: 'stop' });
+      }
+    }
   };
 
   return { runGenerators };

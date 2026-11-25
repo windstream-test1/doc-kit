@@ -21,6 +21,11 @@ and an input, from flags or a [configuration file](#configuration-files):
 npx @doc-kit/cli generate -t html -t orama-db -i "docs/**/*.md" -o out
 ```
 
+On interactive terminals, builds display a progress bar on stderr with completed
+pipeline stages, the current parser or generator, and processed item counts and
+file names where available. Redirecting or piping stdout or stderr disables the
+bar, keeping script and CI output unchanged.
+
 Quote glob patterns, so they reach doc-kit as written instead of being
 expanded by your shell. Options that take a list accept several values after
 one flag (`-t html orama-db`) or the flag repeated (`-t html -t orama-db`).

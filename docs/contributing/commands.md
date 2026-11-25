@@ -7,8 +7,10 @@ instead: `doc-kit generate --target` already runs custom generators.
 
 The CLI is built on [Commander](https://github.com/tj/commander.js). Each
 command is a module in `packages/cli/bin/commands/` whose default export is a
-Commander `Command`. `packages/cli/bin/cli.mjs` adds every command listed in
-`packages/cli/bin/commands/index.mjs` to the program. The commands that exist
+function that creates a Commander `Command`. `packages/cli/bin/cli.mjs` creates
+the commands through `packages/cli/bin/commands/index.mjs` and adds them to the
+program. Command factories receive an optional `onProgress` callback to pass to
+`createGenerator({ onProgress })` when they run a build. The commands that exist
 today are documented on the [CLI](../cli.md) page.
 
 ## Create the command
@@ -19,14 +21,16 @@ import { Command, Option } from 'commander';
 
 import { errorWrap } from '../utils.mjs';
 
-export default new Command('my-command')
-  .description('Does something useful')
-  .addOption(new Option('-f, --force', 'Overwrite existing files'))
-  .action(
-    errorWrap(async opts => {
-      logger.info(`Running with force: ${Boolean(opts.force)}`);
-    })
-  );
+export default function createMyCommand() {
+  return new Command('my-command')
+    .description('Does something useful')
+    .addOption(new Option('-f, --force', 'Overwrite existing files'))
+    .action(
+      errorWrap(async opts => {
+        logger.info(`Running with force: ${Boolean(opts.force)}`);
+      })
+    );
+}
 ```
 
 Wrap every action in `errorWrap` from `packages/cli/bin/utils.mjs`. It awaits
@@ -40,14 +44,20 @@ before any command runs.
 ## Register it
 
 Import the command in `packages/cli/bin/commands/index.mjs` and add it to the
-exported array:
+array returned by `createCommands`:
 
 ```js displayName="packages/cli/bin/commands/index.mjs"
-import generate from './generate.mjs';
-import myCommand from './my-command.mjs';
-import preview from './preview.mjs';
+import createGenerateCommand from './generate.mjs';
+import createMyCommand from './my-command.mjs';
+import createPreviewCommand from './preview.mjs';
 
-export default [generate, preview, myCommand];
+export default function createCommands(onProgress) {
+  return [
+    createGenerateCommand(onProgress),
+    createPreviewCommand(onProgress),
+    createMyCommand(),
+  ];
+}
 ```
 
 Nothing else needs to change. Commander builds the help text from the
@@ -61,20 +71,22 @@ positional arguments with `.argument()`. The action receives the positional
 arguments first, then the parsed options, then the `Command` itself.
 
 ```js displayName="packages/cli/bin/commands/my-command.mjs"
-export default new Command('my-command')
-  .argument('<name>', 'What to act on')
-  .addOption(new Option('-o, --output <directory>', 'The output directory'))
-  .addOption(new Option('--count <number>', 'How many').argParser(Number))
-  .addOption(
-    new Option('--mode <mode>', 'How to run')
-      .choices(['fast', 'safe'])
-      .default('safe')
-  )
-  .action(
-    errorWrap(async (name, opts) => {
-      // opts.output, opts.count, opts.mode
-    })
-  );
+export default function createMyCommand() {
+  return new Command('my-command')
+    .argument('<name>', 'What to act on')
+    .addOption(new Option('-o, --output <directory>', 'The output directory'))
+    .addOption(new Option('--count <number>', 'How many').argParser(Number))
+    .addOption(
+      new Option('--mode <mode>', 'How to run')
+        .choices(['fast', 'safe'])
+        .default('safe')
+    )
+    .action(
+      errorWrap(async (name, opts) => {
+        // opts.output, opts.count, opts.mode
+      })
+    );
+}
 ```
 
 | Syntax               | Meaning                                         |
@@ -98,11 +110,11 @@ either side of the command name (`doc-kit --log-level debug my-command` or
 - **Try it** from the repository root with
   `node --run run -- my-command --help`, which runs
   `node packages/cli/bin/cli.mjs`.
-- **Keep the command thin.** `@doc-kit/cli` publishes only `bin/` (see
+- **Keep the command thin.** `@doc-kit/cli` publishes `bin/` and `src/` (see
   `files` in `packages/cli/package.json`), and `node --run test` only picks up
-  tests under `packages/*/src/` and `scripts/`, never `bin/`. Put logic worth
-  testing in `@doc-kit/core`, with its tests in a `__tests__` directory next
-  to it.
+  tests under `packages/*/src/` and `scripts/`, never `bin/`. Put reusable CLI
+  logic in `packages/cli/src/` and pipeline logic in `@doc-kit/core`, with
+  tests in a `__tests__` directory next to the source.
 - **Document it** with a section on the [CLI page](../cli.md) (`docs/cli.md`),
   using the same option-list format as the existing commands, and in
   `packages/cli/README.md` if it changes how people use the package. If it
