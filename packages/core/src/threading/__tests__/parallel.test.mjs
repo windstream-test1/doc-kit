@@ -81,6 +81,91 @@ async function checkChunksPerThread(toInput) {
 }
 
 describe('createParallelWorker', () => {
+  it('reports completed inputs and file labels for both local and worker tasks', async () => {
+    for (const threads of [1, 2]) {
+      const events = [];
+      const items = [
+        ['a.md', '/'],
+        ['b.md', '/'],
+        ['c.md', '/'],
+      ];
+      const generator = {
+        name: 'ast',
+        processChunk: async (batch, indices) =>
+          indices.map(index => batch[index]),
+      };
+      const pool = { run: async task => task.input };
+      const worker = createParallelWorker(
+        'ast',
+        generator,
+        pool,
+        { threads, chunkSize: 1 },
+        event => events.push(event)
+      );
+      deepStrictEqual(await collectStream(worker.stream(items)), items);
+      deepStrictEqual(
+        events.map(event => event.completed),
+        [0, 1, 2, 3]
+      );
+      deepStrictEqual(
+        events.map(event => event.total),
+        [3, 3, 3, 3]
+      );
+      deepStrictEqual(
+        events.slice(1).map(event => event.label),
+        ['a.md', 'b.md', 'c.md']
+      );
+    }
+  });
+
+  it('reports workers as they finish even when earlier chunks are still pending', async () => {
+    const tasks = [];
+    const events = [];
+    const pool = {
+      run: task =>
+        new Promise(resolve => tasks.push(() => resolve(task.input))),
+    };
+    const worker = createParallelWorker(
+      'ast-js',
+      astJsGenerator,
+      pool,
+      { threads: 2, chunkSize: 1 },
+      event => events.push(event)
+    );
+    const results = collectStream(worker.stream(['a.js', 'b.js', 'c.js']));
+    await Promise.resolve();
+    tasks[2]();
+    await new Promise(resolve => setImmediate(resolve));
+    strictEqual(events.at(-1).label, 'c.js');
+    strictEqual(events.at(-1).completed, 1);
+    tasks[1]();
+    tasks[0]();
+    deepStrictEqual(await results, ['a.js', 'b.js', 'c.js']);
+    strictEqual(events.at(-1).completed, 3);
+  });
+
+  it('does not count failed chunks as completed', async () => {
+    const events = [];
+    const generator = {
+      name: 'broken',
+      processChunk: async () => {
+        throw new Error('failed');
+      },
+    };
+    const worker = createParallelWorker(
+      'broken',
+      generator,
+      null,
+      { threads: 1, chunkSize: 1 },
+      event => events.push(event)
+    );
+    await rejects(collectStream(worker.stream(['file.md'])), /failed/);
+    deepStrictEqual(
+      events.map(event => event.completed),
+      [0]
+    );
+  });
+
   it('should create a ParallelWorker with stream method', async () => {
     const pool = createWorkerPool(2);
     const worker = createParallelWorker('metadata', metadataGenerator, pool, {

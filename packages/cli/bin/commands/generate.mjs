@@ -8,8 +8,6 @@ import { Command, Option } from 'commander';
 
 import { errorWrap } from '../utils.mjs';
 
-const { runGenerators } = createGenerator();
-
 /**
  * @typedef {Object} CLIOptions
  * @property {string} configFile
@@ -55,15 +53,19 @@ export const generateOptions = [
   new Option('--type-map <url>', 'Type map URL or path'),
 ];
 
-const generate = new Command('generate').description('Generate API docs');
+/** Creates the generate command with the CLI's optional progress reporter. */
+export default function createGenerateCommand(onProgress) {
+  const { runGenerators } = createGenerator({ onProgress });
+  const generate = new Command('generate').description('Generate API docs');
 
-generateOptions.forEach(option => generate.addOption(option));
+  generateOptions.forEach(option => generate.addOption(option));
 
-export default generate.action(
-  errorWrap(async opts => {
-    const config = await setConfig(opts);
-    assertRunnableOptions(config);
+  return generate.action(
+    errorWrap(async opts => {
+      const config = await setConfig(opts);
+      assertRunnableOptions(config);
 
-    await runGenerators({ ...config, discardResults: true });
-  })
-);
+      await runGenerators({ ...config, discardResults: true });
+    })
+  );
+}

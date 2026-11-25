@@ -66,13 +66,16 @@ const createTask = (
  * @param {GeneratorMetadata} generator - The loaded generator
  * @param {import('piscina').Piscina} pool - Piscina instance
  * @param {import('../utils/configuration/types').Configuration} configuration - Generator options
+ * @param {(event: import('../generators/types').ProgressEvent) => void} [onProgress]
+ * Reports completed work on this thread, including worker results.
  * @returns {ParallelWorker}
  */
 export default function createParallelWorker(
   specifier,
   generator,
   pool,
-  configuration
+  configuration,
+  onProgress
 ) {
   const { threads, chunkSize } = configuration;
 
@@ -93,6 +96,30 @@ export default function createParallelWorker(
      */
     async *stream(items, extra) {
       const streamed = isAsyncIterable(items);
+      let completed = 0;
+      const total = streamed ? undefined : items.length;
+
+      /** Report a settled chunk, counting inputs rather than expanded output. */
+      const report = (batch, indices) => {
+        completed += indices.length;
+        const item = batch[indices.at(-1)];
+        const label =
+          typeof item === 'string'
+            ? item
+            : Array.isArray(item)
+              ? item[0]
+              : (item?.path ?? item?.head?.path);
+
+        onProgress?.({
+          generator: name,
+          state: 'progress',
+          completed,
+          total,
+          label,
+        });
+      };
+
+      onProgress?.({ generator: name, state: 'progress', completed, total });
 
       if (!streamed && items.length === 0) {
         return;
@@ -126,7 +153,9 @@ export default function createParallelWorker(
       if (threads <= 1 || (!streamed && items.length <= 2)) {
         for await (const batch of batches) {
           for (const indices of distribute(batch)) {
-            yield await generator.processChunk(batch, indices, extra);
+            const result = await generator.processChunk(batch, indices, extra);
+            report(batch, indices);
+            yield result;
           }
         }
 
@@ -171,7 +200,10 @@ export default function createParallelWorker(
           tasks.push(
             task
               .then(
-                result => ({ result }),
+                result => {
+                  report(batch, indices);
+                  return { result };
+                },
                 error => ({ error })
               )
               .finally(() => {
